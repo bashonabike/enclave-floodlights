@@ -51,8 +51,6 @@ unsigned long width = 0;
 unsigned long avgWidth = 0;
 _Bool set = 0;
 _Bool ready = 0;
-_Bool flip = 0;
-_Bool blip = 0;
 unsigned long start = 0;
 unsigned short place = 0;
 
@@ -141,11 +139,7 @@ void resetRiseFall() {
 void mainsDetect() {
   //Why does width occasionally jump to ~20k micros for a bit??  Then returns back to ~61Hz
   //Filtered out by blip discard method.  May be artifact of low frequency operation
-	curMains = readADCChannel(MAINS);
-  if (flip && curMains > HALF_ADC_WIDTH) {
     if (set) {
-    	incrDuty++;
-    	if(incrDuty%16 == 0)        trimDuty = (trimDuty + 1)%MAX_TRIM;
     	curStartTilNow = starttilnow();
       //Slowly track to actual width if permanent shift
       avgWidth = ((19*(unsigned long)width + (curStartTilNow))/20);
@@ -174,17 +168,13 @@ else {
       set = 1;
     start = micros();
     }
-    flip = 0;
-//    curDuty = readADCChannel(TRIM_DUTY);
-//    if (trimDuty != curDuty) {
-//      trimDuty = (unsigned short) ((9*trimDuty + curDuty)/10);
-   // trimDuty = (trimDuty + 1)%MAX_TRIM;
-      //reset applicable variables
+    curDuty = readADCChannel(TRIM_DUTY);
+    if (trimDuty != curDuty) {
+      trimDuty = (unsigned short) ((9*trimDuty + curDuty)/10);
+    trimDuty = (trimDuty + 1)%MAX_TRIM;
+    //  reset applicable variables
 resetRiseFall();
-//  }
-  } else if (!flip && curMains <= HALF_ADC_WIDTH) {
-    flip = 1;
-  }
+    }
 }
 
 void pulseFloodlight() {
