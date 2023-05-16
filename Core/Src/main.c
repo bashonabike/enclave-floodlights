@@ -53,6 +53,7 @@ typedef enum {
 struct FloodlightLED {
 	TempPotChannelDef tempPotColourChannel;
 	uint32_t LEDColourChannelPin;
+	_Bool pinOn;
 	unsigned short dim;
 	unsigned short rise1;
 	unsigned short fall1;
@@ -67,7 +68,6 @@ struct FloodlightLED floodlights[NUMLIGHTS][COLOURCHANNELSPERLIGHT];
 unsigned long width = 0;
 unsigned long avgWidth = 0;
 _Bool set = 0;
-_Bool ready = 0;
 unsigned long start = 0;
 unsigned short place = 0;
 
@@ -100,8 +100,9 @@ static void MX_TIM2_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define micros() (*DWT_CYCCNT/64)
-#define starttilnow() ((micros() - start) % startTilNowReset)
+//Set to (127+1)*(15+1) so same rate as timer
+#define micros() (*DWT_CYCCNT/2048)
+#define starttilnow() (micros() - start)
 
 #define ADC_WIDTH 4092
 #define HALF_ADC_WIDTH 2048
@@ -112,6 +113,13 @@ static void MX_TIM2_Init(void);
 //#define MAX_TRIM 3900
 #define WIDTH_TRIM (MAX_TRIM - MIN_TRIM)
 #define CORRECTED_NEW_TRIM ((trimDuty - MIN_TRIM)%WIDTH_TRIM)
+
+#define LED_ON_STATE(floodlightNum, LEDNum) if(!floodlights[floodlightNum][LEDNum].pinOn) {\
+		HAL_GPIO_WritePin(GPIOB, floodlights[floodlightNum][LEDNum].LEDColourChannelPin, GPIO_PIN_SET);\
+		floodlights[floodlightNum][LEDNum].pinOn = 1;}
+#define LED_OFF_STATE(floodlightNum, LEDNum) if(floodlights[floodlightNum][LEDNum].pinOn) {\
+		HAL_GPIO_WritePin(GPIOB, floodlights[floodlightNum][LEDNum].LEDColourChannelPin, GPIO_PIN_RESET);\
+		floodlights[floodlightNum][LEDNum].pinOn = 0;}
 
 _Bool initializeFloodlightStructs() {
 	short floodlightNum, LEDNum;
@@ -145,12 +153,14 @@ _Bool initializeFloodlightStructs() {
 				//Configure shit!
 				return 1;
 			}
+			floodlights[floodlightNum][LEDNum].pinOn = 0;
 			//TEMP!
-			floodlights[floodlightNum][LEDNum].dim = 0;
+			floodlights[floodlightNum][LEDNum].dim = 800;
 			floodlights[floodlightNum][LEDNum].rise1 = 0;
 			floodlights[floodlightNum][LEDNum].fall1 = 0;
 			floodlights[floodlightNum][LEDNum].rise2 = 0;
 			floodlights[floodlightNum][LEDNum].fall2 = 0;
+
 		}
 	}
 	return 0;
@@ -177,9 +187,11 @@ uint16_t readADCChannel(TempPotChannelDef channel) {
 }
 void resetRiseFall(char floodlightNum, char LEDNum) {
 	//Divide by 2 since we cycle duty per half-wave, not full wave
-	static unsigned short effDuty;
+		static unsigned short effDuty;
 	effDuty = (short) ((((unsigned long) width
 			* (unsigned long) (floodlights[0][LEDNum].dim - MIN_TRIM))) / (2 * WIDTH_TRIM));
+	//TODO: if RGB value is odd, increment just fall by 1, to allow for full 256 bins avail
+	//TODO: calculate & set timer freq so exactly 512*mains freq
 	floodlights[floodlightNum][LEDNum].rise1 = ((width / 2) - effDuty) / 2;
 	floodlights[floodlightNum][LEDNum].fall1 = floodlights[floodlightNum][LEDNum].rise1 + effDuty;
 	floodlights[floodlightNum][LEDNum].rise2 = (width / 2) + floodlights[floodlightNum][LEDNum].rise1;
@@ -202,16 +214,14 @@ void mainsDetect() {
 		curStartTilNow = starttilnow();
 		//Slowly track to actual width if permanent shift
 		avgWidth = ((19 * (unsigned long) width + (curStartTilNow)) / 20);
-		width = avgWidth;
 		//Try to filter out blips, is this an actual frequency shift on mains?
 		//If average closer to calculated than historical, this is the new frequency
 		//Explicit cast to (long) since stdlib has no overload of abs for unsigned long
-      if (width == 0 || abs((unsigned long)((curStartTilNow) - width)) < 1000
+      if (width == 0 || abs((unsigned long)((curStartTilNow) - width)) < width/16
        || abs((unsigned long)((curStartTilNow) - avgWidth)) < abs((unsigned long)(width - avgWidth))) {
         width = curStartTilNow;
 		//Reset avg
 		//avgWidth = width;
-		ready = 1;
 		//reset applicable variables
 		resetAllRiseFall();
       }
@@ -221,46 +231,92 @@ void mainsDetect() {
 	}
 	*DWT_CYCCNT = 0;                  // clear DWT cycle counter
 	start = micros();
+	static _Bool flip1, flip2;
+	//	reset++;
+		//if (reset == 5) {
+			if (floodlights[0][0].dim > 5000) floodlights[0][0].dim=0;
+			if (floodlights[0][1].dim > 5000) floodlights[0][1].dim=0;
+			if(!flip1) {
+			floodlights[0][0].dim = (floodlights[0][0].dim + 16);
+			if (floodlights[0][0].dim >= 4095) {
+				flip1 = 1;
+				floodlights[0][0].dim = 4095;
+			}
+			} else {
+				floodlights[0][0].dim = (floodlights[0][0].dim - 16);
+				if (floodlights[0][0].dim <= 0 || floodlights[0][0].dim > 5000) {
+					flip1 = 0;
+					floodlights[0][0].dim = 0;
+				}
+			}
+			if(!flip2) {
+			floodlights[0][1].dim = (floodlights[0][1].dim - 16);
+			if (floodlights[0][1].dim == 4095) flip2 = 1;
+			if (floodlights[0][1].dim <= 0 || floodlights[0][1].dim > 5000) {
+				flip2 = 1;
+				floodlights[0][1].dim = 0;
+			}
+			} else {
+				floodlights[0][1].dim = (floodlights[0][1].dim + 16);
+				if (floodlights[0][0].dim >= 4095) {
+					flip2 = 1;
+					floodlights[0][1].dim = 4095;
+				}
+			}
+					floodlights[0][2].dim = abs(floodlights[0][0].dim - floodlights[0][1].dim) % 4096;
+					resetRiseFall(0, 0);
+					resetRiseFall(0, 1);
+					resetRiseFall(0, 2);
+		//}
+
+//	floodlights[0][0].dim = (floodlights[0][0].dim + 1) % 4096;
+//			floodlights[0][1].dim = (floodlights[0][1].dim - 1) % 4096;
+//			floodlights[0][2].dim = abs(floodlights[0][0].dim - floodlights[0][1].dim) % 4096;
+//			resetRiseFall(0, 0);
+//			resetRiseFall(0, 1);
+//			resetRiseFall(0, 2);
 
 	//--------------------------------------------------------------------------------------------------------
 	//ONLY FOR TESTING
-	short LEDNum;
-	for (LEDNum = 0; LEDNum < COLOURCHANNELSPERLIGHT; LEDNum++) {
-		static unsigned short curDuty;
-		curDuty = readADCChannel(floodlights[0][LEDNum].tempPotColourChannel);
-		if (readADCChannel(floodlights[0][LEDNum].dim != curDuty)) {
-			floodlights[0][LEDNum].dim =
-					(unsigned short) (9 * floodlights[0][LEDNum].dim + curDuty) / 10;
-			//  reset applicable variables
-			resetRiseFall(0, LEDNum);
-		}
-	}
+//	short LEDNum;
+//	for (LEDNum = 0; LEDNum < COLOURCHANNELSPERLIGHT; LEDNum++) {
+//		static unsigned short curDuty;
+//		curDuty = readADCChannel(floodlights[0][LEDNum].tempPotColourChannel);
+//		if (readADCChannel(floodlights[0][LEDNum].dim != curDuty)) {
+//			floodlights[0][LEDNum].dim =
+//					(unsigned short) (9 * floodlights[0][LEDNum].dim + curDuty) / 10;
+//			//  reset applicable variables
+//			resetRiseFall(0, LEDNum);
+//		}
+//	}
 	//--------------------------------------------------------------------------------------------------------
 }
 
+#pragma GCC push_options
+#pragma GCC optimize ("-O3")
 void pulseFloodlight() {
-	//Triggers every 2 us
-	if (ready) {
-		//Modulo by width in case miss a cycle
-		place = starttilnow() % width;
-		static short floodlightNum, LEDNum;
-		for (floodlightNum = 0; floodlightNum < NUMLIGHTS;
-				floodlightNum++) {
-			for (LEDNum = 0; LEDNum < COLOURCHANNELSPERLIGHT; LEDNum++) {
-				//NOTE: we know as each success LT is evaluated, don't need to re-eval subsequent GTE
-				if (place >= floodlights[floodlightNum][LEDNum].fall2 || place < floodlights[floodlightNum][LEDNum].rise1) {
-					HAL_GPIO_WritePin(GPIOB, floodlights[floodlightNum][LEDNum].LEDColourChannelPin, GPIO_PIN_RESET);
-				} else if (place < floodlights[floodlightNum][LEDNum].fall1) {
-					HAL_GPIO_WritePin(GPIOB, floodlights[floodlightNum][LEDNum].LEDColourChannelPin, GPIO_PIN_SET);
-				} else if (place < floodlights[floodlightNum][LEDNum].rise2) {
-					HAL_GPIO_WritePin(GPIOB, floodlights[floodlightNum][LEDNum].LEDColourChannelPin, GPIO_PIN_RESET);
-				} else if (place < floodlights[floodlightNum][LEDNum].fall2) {
-					HAL_GPIO_WritePin(GPIOB, floodlights[floodlightNum][LEDNum].LEDColourChannelPin, GPIO_PIN_SET);
-				}
+	//Triggers every 32 us
+	place = starttilnow();
+	static short floodlightNum, LEDNum;
+	for (floodlightNum = 0; floodlightNum < NUMLIGHTS;
+			floodlightNum++) {
+		for (LEDNum = 0; LEDNum < COLOURCHANNELSPERLIGHT; LEDNum++) {
+			//NOTE: we know as each success LT is evaluated, don't need to re-eval subsequent GTE
+			if (place < floodlights[floodlightNum][LEDNum].rise1) {
+				LED_OFF_STATE(floodlightNum, LEDNum)
+			} else if (place < floodlights[floodlightNum][LEDNum].fall1) {
+				LED_ON_STATE(floodlightNum, LEDNum)
+			} else if (place < floodlights[floodlightNum][LEDNum].rise2) {
+				LED_OFF_STATE(floodlightNum, LEDNum)
+			} else if (place < floodlights[floodlightNum][LEDNum].fall2) {
+				LED_ON_STATE(floodlightNum, LEDNum)
+			} else {
+				LED_OFF_STATE(floodlightNum, LEDNum)
 			}
 		}
 	}
 }
+#pragma GCC pop_options
 // EXTI Mains External Interrupt ISR Handler
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == Mains_Pin) {
@@ -316,7 +372,6 @@ int main(void)
 	//If fails config, exit program
 	if (initializeFloodlightStructs())
 		return 0;
-
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -325,6 +380,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
 		//  mainsDetect();
 //	  pulseFloodlight();
 	}
@@ -479,9 +535,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 8;
+  htim2.Init.Prescaler = 127;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 16;
+  htim2.Init.Period = 15;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -529,12 +585,19 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(Mains_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : FloodlightGrn_Pin IndicLED_Pin FloodlightBlu_Pin FloodlightRed_Pin */
-  GPIO_InitStruct.Pin = FloodlightGrn_Pin|IndicLED_Pin|FloodlightBlu_Pin|FloodlightRed_Pin;
+  /*Configure GPIO pins : FloodlightGrn_Pin FloodlightBlu_Pin FloodlightRed_Pin */
+  GPIO_InitStruct.Pin = FloodlightGrn_Pin|FloodlightBlu_Pin|FloodlightRed_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : IndicLED_Pin */
+  GPIO_InitStruct.Pin = IndicLED_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_Init(IndicLED_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);
