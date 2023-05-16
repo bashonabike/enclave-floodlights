@@ -57,17 +57,23 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define TrimShift_Pin GPIO_PIN_0
-#define TrimShift_GPIO_Port GPIOA
-#define TrimDuty_Pin GPIO_PIN_1
-#define TrimDuty_GPIO_Port GPIOA
+#define DimGrn_Pin GPIO_PIN_0
+#define DimGrn_GPIO_Port GPIOA
+#define DimBlu_Pin GPIO_PIN_1
+#define DimBlu_GPIO_Port GPIOA
+#define DimRed_Pin GPIO_PIN_2
+#define DimRed_GPIO_Port GPIOA
 #define Mains_Pin GPIO_PIN_3
 #define Mains_GPIO_Port GPIOA
 #define Mains_EXTI_IRQn EXTI3_IRQn
-#define Floodlight_Pin GPIO_PIN_1
-#define Floodlight_GPIO_Port GPIOB
+#define FloodlightGrn_Pin GPIO_PIN_1
+#define FloodlightGrn_GPIO_Port GPIOB
 #define IndicLED_Pin GPIO_PIN_3
 #define IndicLED_GPIO_Port GPIOB
+#define FloodlightBlu_Pin GPIO_PIN_6
+#define FloodlightBlu_GPIO_Port GPIOB
+#define FloodlightRed_Pin GPIO_PIN_7
+#define FloodlightRed_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

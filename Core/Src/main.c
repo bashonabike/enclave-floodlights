@@ -1,20 +1,20 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2023 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Main program body
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2023 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
@@ -46,7 +46,24 @@ ADC_HandleTypeDef hadc1;
 TIM_HandleTypeDef htim2;
 
 /* USER CODE BEGIN PV */
-unsigned short trimDuty = 150;
+typedef enum {
+	DIM_GRN = ADC_CHANNEL_1, DIM_BLU = ADC_CHANNEL_2, DIM_RED = ADC_CHANNEL_3
+} TempPotChannelDef;
+
+struct FloodlightLED {
+	TempPotChannelDef tempPotColourChannel;
+	uint32_t LEDColourChannelPin;
+	unsigned short dim;
+	unsigned short rise1;
+	unsigned short fall1;
+	unsigned short rise2;
+	unsigned short fall2;
+};
+
+#define NUMLIGHTS 1
+#define COLOURCHANNELSPERLIGHT 3
+struct FloodlightLED floodlights[NUMLIGHTS][COLOURCHANNELSPERLIGHT];
+
 unsigned long width = 0;
 unsigned long avgWidth = 0;
 _Bool set = 0;
@@ -55,26 +72,21 @@ unsigned long start = 0;
 unsigned short place = 0;
 
 unsigned short curMains = 0;
-unsigned short curDuty = 0;
 unsigned char incrDuty = 0;
 int curShift = 0;
 uint32_t curStartTilNow = 0;
-unsigned short effDuty = 0;
-unsigned short rise1 = 0;
-unsigned short fall1 = 0;
-unsigned short rise2 = 0;
-unsigned short fall2 = 0;
 
-volatile uint32_t *DWT_CONTROL = (uint32_t *) 0xE0001000;
-volatile uint32_t *DWT_CYCCNT = (uint32_t *) 0xE0001004;
-volatile uint32_t *DEMCR = (uint32_t *) 0xE000EDFC;
-volatile uint32_t *LAR  = (uint32_t *) 0xE0001FB0;   // <-- added lock access register
+volatile uint32_t *DWT_CONTROL = (uint32_t*) 0xE0001000;
+volatile uint32_t *DWT_CYCCNT = (uint32_t*) 0xE0001004;
+volatile uint32_t *DEMCR = (uint32_t*) 0xE000EDFC;
+volatile uint32_t *LAR = (uint32_t*) 0xE0001FB0; // <-- added lock access register
 
 //PLACE SHIFT HERE!!  FACTOR FOR DELAY IN MAINS DETECTION
-int shift = 1440;
+//485us seems to be good shift delay
+int shift = 0;
 
-const uint32_t startReset= (uint32_t)(pow(2, sizeof(uint32_t)*8));
-const uint32_t startTilNowReset= (uint32_t)(pow(2, sizeof(uint32_t)*8)/64);
+const uint32_t startReset = (uint32_t) (pow(2, sizeof(uint32_t) * 8));
+const uint32_t startTilNowReset = (uint32_t) (pow(2, sizeof(uint32_t) * 8) / 64);
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -99,117 +111,164 @@ static void MX_TIM2_Init(void);
 //#define MIN_TRIM 100
 //#define MAX_TRIM 3900
 #define WIDTH_TRIM (MAX_TRIM - MIN_TRIM)
+#define CORRECTED_NEW_TRIM ((trimDuty - MIN_TRIM)%WIDTH_TRIM)
 
-typedef enum  {
-	TRIM_SHIFT = ADC_CHANNEL_1,
-	TRIM_DUTY = ADC_CHANNEL_2,
-	MAINS = ADC_CHANNEL_4
-} ChannelDef;
+_Bool initializeFloodlightStructs() {
+	short floodlightNum, LEDNum;
+	for (floodlightNum = 0; floodlightNum < NUMLIGHTS;
+			floodlightNum++) {
+		for (LEDNum = 0; LEDNum < COLOURCHANNELSPERLIGHT; LEDNum++) {
+			//NOTE: assuming no more than 10 LED per floodlight
+			switch (10*floodlightNum + LEDNum) {
+			case 0:
+				floodlights[floodlightNum][LEDNum].tempPotColourChannel = ADC_CHANNEL_1;
+				floodlights[floodlightNum][LEDNum].LEDColourChannelPin = FloodlightGrn_Pin;
+				break;
+			case 1:
+				floodlights[floodlightNum][LEDNum].tempPotColourChannel = ADC_CHANNEL_2;
+				floodlights[floodlightNum][LEDNum].LEDColourChannelPin = FloodlightBlu_Pin;
+				break;
+			case 2:
+				floodlights[floodlightNum][LEDNum].tempPotColourChannel = ADC_CHANNEL_3;
+				floodlights[floodlightNum][LEDNum].LEDColourChannelPin = FloodlightRed_Pin;
+				break;
+//			case 10:
+//				Floodlight[floodlightNum][LEDNum].tempPotColourChannel = ADC_CHANNEL_1;
+//				break;
+//			case 11:
+//				Floodlight[floodlightNum][LEDNum].tempPotColourChannel = ADC_CHANNEL_2;
+//				break;
+//			case 12:
+//				Floodlight[floodlightNum][LEDNum].tempPotColourChannel = ADC_CHANNEL_3;
+//				break;
+			default:
+				//Configure shit!
+				return 1;
+			}
+			//TEMP!
+			floodlights[floodlightNum][LEDNum].dim = 0;
+			floodlights[floodlightNum][LEDNum].rise1 = 0;
+			floodlights[floodlightNum][LEDNum].fall1 = 0;
+			floodlights[floodlightNum][LEDNum].rise2 = 0;
+			floodlights[floodlightNum][LEDNum].fall2 = 0;
+		}
+	}
+	return 0;
+}
 
-uint16_t readADCChannel(ChannelDef channel) {
-	  ADC_ChannelConfTypeDef sConfig = {0};
+uint16_t readADCChannel(TempPotChannelDef channel) {
+	ADC_ChannelConfTypeDef sConfig = { 0 };
 
 	/** Configure Regular Channel
-	  */
-	  sConfig.Channel = channel;
-	  sConfig.Rank = ADC_REGULAR_RANK_1;
-	  sConfig.SingleDiff = ADC_SINGLE_ENDED;
-	  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
-	  sConfig.OffsetNumber = ADC_OFFSET_NONE;
-	  sConfig.Offset = 0;
-	  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-	  {
-	    Error_Handler();
-	  }
+	 */
+	sConfig.Channel = channel;
+	sConfig.Rank = ADC_REGULAR_RANK_1;
+	sConfig.SingleDiff = ADC_SINGLE_ENDED;
+	sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+	sConfig.OffsetNumber = ADC_OFFSET_NONE;
+	sConfig.Offset = 0;
+	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
+		Error_Handler();
+	}
 
-	  HAL_ADC_Start(&hadc1);
-	  HAL_ADC_PollForConversion(&hadc1, 1);
-	  return HAL_ADC_GetValue(&hadc1);
+	HAL_ADC_Start(&hadc1);
+	HAL_ADC_PollForConversion(&hadc1, 1);
+	return HAL_ADC_GetValue(&hadc1);
 }
-void resetRiseFall() {
-  //Divide by 2 since we cycle duty per half-wave, not full wave
-  effDuty = (short)((((unsigned long)width
-		  *(unsigned long)(trimDuty - MIN_TRIM))) / (2*WIDTH_TRIM));
-  rise1 = ((width/2) - effDuty)/2;
-  fall1 = rise1 + effDuty;
-  rise2 = (width/2) + rise1;
-  fall2 = (width/2) + fall1;
+void resetRiseFall(char floodlightNum, char LEDNum) {
+	//Divide by 2 since we cycle duty per half-wave, not full wave
+	static unsigned short effDuty;
+	effDuty = (short) ((((unsigned long) width
+			* (unsigned long) (floodlights[0][LEDNum].dim - MIN_TRIM))) / (2 * WIDTH_TRIM));
+	floodlights[floodlightNum][LEDNum].rise1 = ((width / 2) - effDuty) / 2;
+	floodlights[floodlightNum][LEDNum].fall1 = floodlights[floodlightNum][LEDNum].rise1 + effDuty;
+	floodlights[floodlightNum][LEDNum].rise2 = (width / 2) + floodlights[floodlightNum][LEDNum].rise1;
+	floodlights[floodlightNum][LEDNum].fall2 = (width / 2) + floodlights[floodlightNum][LEDNum].fall1;
+}
+void resetAllRiseFall() {
+	short floodlightNum, LEDNum;
+		for (floodlightNum = 0; floodlightNum < NUMLIGHTS;
+				floodlightNum++) {
+			for (LEDNum = 0; LEDNum < COLOURCHANNELSPERLIGHT; LEDNum++) {
+				resetRiseFall(floodlightNum, LEDNum);
+			}
+		}
 }
 
 void mainsDetect() {
-  //Why does width occasionally jump to ~20k micros for a bit??  Then returns back to ~61Hz
-  //Filtered out by blip discard method.  May be artifact of low frequency operation
-    if (set) {
-    	curStartTilNow = starttilnow();
-      //Slowly track to actual width if permanent shift
-      avgWidth = ((19*(unsigned long)width + (curStartTilNow))/20);
-      //Try to filter out blips, is this an actual frequency shift on mains?
-      //If average closer to calculated than historical, this is the new frequency
-      //Explicit cast to (long) since stdlib has no overload of abs for unsigned long
+	//Why does width occasionally jump to ~20k micros for a bit??  Then returns back to ~61Hz
+	//Filtered out by blip discard method.  May be artifact of low frequency operation
+	if (set) {
+		curStartTilNow = starttilnow();
+		//Slowly track to actual width if permanent shift
+		avgWidth = ((19 * (unsigned long) width + (curStartTilNow)) / 20);
+		width = avgWidth;
+		//Try to filter out blips, is this an actual frequency shift on mains?
+		//If average closer to calculated than historical, this is the new frequency
+		//Explicit cast to (long) since stdlib has no overload of abs for unsigned long
       if (width == 0 || abs((unsigned long)((curStartTilNow) - width)) < 1000
        || abs((unsigned long)((curStartTilNow) - avgWidth)) < abs((unsigned long)(width - avgWidth))) {
         width = curStartTilNow;
-        //Reset avg
-        avgWidth = width;
-        ready = 1;
-      //reset applicable variables
-resetRiseFall();
+		//Reset avg
+		//avgWidth = width;
+		ready = 1;
+		//reset applicable variables
+		resetAllRiseFall();
       }
-    //Factor for blip, back start up to estimated actual point
-    if (abs((long)((curStartTilNow) - width)) > 1000) {
-    start = (start + width)%startReset;
-}
-else {
-    start = micros();
-  }
 
-    }
-    else {
-      set = 1;
-    start = micros();
-    }
-    curDuty = readADCChannel(TRIM_DUTY);
-    if (trimDuty != curDuty) {
-      trimDuty = (unsigned short) ((9*trimDuty + curDuty)/10);
-    trimDuty = (trimDuty + 1)%MAX_TRIM;
-    //  reset applicable variables
-resetRiseFall();
-    }
+	} else {
+		set = 1;
+	}
+	*DWT_CYCCNT = 0;                  // clear DWT cycle counter
+	start = micros();
+
+	//--------------------------------------------------------------------------------------------------------
+	//ONLY FOR TESTING
+	short LEDNum;
+	for (LEDNum = 0; LEDNum < COLOURCHANNELSPERLIGHT; LEDNum++) {
+		static unsigned short curDuty;
+		curDuty = readADCChannel(floodlights[0][LEDNum].tempPotColourChannel);
+		if (readADCChannel(floodlights[0][LEDNum].dim != curDuty)) {
+			floodlights[0][LEDNum].dim =
+					(unsigned short) (9 * floodlights[0][LEDNum].dim + curDuty) / 10;
+			//  reset applicable variables
+			resetRiseFall(0, LEDNum);
+		}
+	}
+	//--------------------------------------------------------------------------------------------------------
 }
 
 void pulseFloodlight() {
+	//Triggers every 2 us
 	if (ready) {
-	    //Modulo by width in case miss a cycle
-	    place = (starttilnow() + shift) % width;
-	    if (place >= fall2 || place < rise1) {
-	    	HAL_GPIO_WritePin(GPIOB, IndicLED_Pin, GPIO_PIN_RESET);
-	    	HAL_GPIO_WritePin(GPIOB, Floodlight_Pin, GPIO_PIN_RESET);
-	    } else if (place >= rise1 && place < fall1) {
-	    	HAL_GPIO_WritePin(GPIOB, IndicLED_Pin, GPIO_PIN_SET);
-	    	HAL_GPIO_WritePin(GPIOB, Floodlight_Pin, GPIO_PIN_SET);
-	    } else if (place >= fall1 && place < rise2) {
-	    	HAL_GPIO_WritePin(GPIOB, IndicLED_Pin, GPIO_PIN_RESET);
-	    	HAL_GPIO_WritePin(GPIOB, Floodlight_Pin, GPIO_PIN_RESET);
-	    } else if (place >= rise2 && place < fall2) {
-	    	HAL_GPIO_WritePin(GPIOB, IndicLED_Pin, GPIO_PIN_SET);
-	    	HAL_GPIO_WritePin(GPIOB, Floodlight_Pin, GPIO_PIN_SET);
-	    }
-	  }
-
-//	curShift = 9*(readADCChannel(TRIM_SHIFT) - 2400);
-//	  if (shift != curShift) {
-//	    shift = (9*shift + curShift)/10;
-//	  }
+		//Modulo by width in case miss a cycle
+		place = starttilnow() % width;
+		static short floodlightNum, LEDNum;
+		for (floodlightNum = 0; floodlightNum < NUMLIGHTS;
+				floodlightNum++) {
+			for (LEDNum = 0; LEDNum < COLOURCHANNELSPERLIGHT; LEDNum++) {
+				//NOTE: we know as each success LT is evaluated, don't need to re-eval subsequent GTE
+				if (place >= floodlights[floodlightNum][LEDNum].fall2 || place < floodlights[floodlightNum][LEDNum].rise1) {
+					HAL_GPIO_WritePin(GPIOB, floodlights[floodlightNum][LEDNum].LEDColourChannelPin, GPIO_PIN_RESET);
+				} else if (place < floodlights[floodlightNum][LEDNum].fall1) {
+					HAL_GPIO_WritePin(GPIOB, floodlights[floodlightNum][LEDNum].LEDColourChannelPin, GPIO_PIN_SET);
+				} else if (place < floodlights[floodlightNum][LEDNum].rise2) {
+					HAL_GPIO_WritePin(GPIOB, floodlights[floodlightNum][LEDNum].LEDColourChannelPin, GPIO_PIN_RESET);
+				} else if (place < floodlights[floodlightNum][LEDNum].fall2) {
+					HAL_GPIO_WritePin(GPIOB, floodlights[floodlightNum][LEDNum].LEDColourChannelPin, GPIO_PIN_SET);
+				}
+			}
+		}
+	}
 }
 // EXTI Mains External Interrupt ISR Handler
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-	if(GPIO_Pin == Mains_Pin) {
+	if (GPIO_Pin == Mains_Pin) {
 		mainsDetect();
 
 	}
 }
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
-{
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	pulseFloodlight();
 }
 /* USER CODE END 0 */
@@ -245,27 +304,30 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-  //Start interrupts & ADC
-  HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
-  HAL_TIM_Base_Start_IT(&htim2);
+	//Start interrupts & ADC
+	HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
+	HAL_TIM_Base_Start_IT(&htim2);
 
-  *DEMCR = *DEMCR | 0x01000000;     // enable trace
-  *LAR = 0xC5ACCE55;                // <-- added unlock access to DWT (ITM, etc.)registers
-  *DWT_CYCCNT = 0;                  // clear DWT cycle counter
-  *DWT_CONTROL = *DWT_CONTROL | 1;  // enable DWT cycle counter
+	*DEMCR = *DEMCR | 0x01000000;     // enable trace
+	*LAR = 0xC5ACCE55;    // <-- added unlock access to DWT (ITM, etc.)registers
+	*DWT_CYCCNT = 0;                  // clear DWT cycle counter
+	*DWT_CONTROL = *DWT_CONTROL | 1;  // enable DWT cycle counter
+
+	//If fails config, exit program
+	if (initializeFloodlightStructs())
+		return 0;
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+	while (1) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	//  mainsDetect();
+		//  mainsDetect();
 //	  pulseFloodlight();
-  }
+	}
   /* USER CODE END 3 */
 }
 
@@ -366,7 +428,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_1;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SingleDiff = ADC_DIFFERENTIAL_ENDED;
+  sConfig.SingleDiff = ADC_SINGLE_ENDED;
   sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
@@ -376,26 +438,24 @@ static void MX_ADC1_Init(void)
   }
   /* USER CODE BEGIN ADC1_Init 2 */
 
-  sConfig.Channel = ADC_CHANNEL_2;
-  sConfig.Rank = ADC_REGULAR_RANK_2;
-  sConfig.SingleDiff = ADC_SINGLE_ENDED;
-  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
-  sConfig.OffsetNumber = ADC_OFFSET_NONE;
-  sConfig.Offset = 0;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfig.Channel = ADC_CHANNEL_3;
-  sConfig.Rank = ADC_REGULAR_RANK_3;
-  sConfig.SingleDiff = ADC_SINGLE_ENDED;
-  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
-  sConfig.OffsetNumber = ADC_OFFSET_NONE;
-  sConfig.Offset = 0;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
+	sConfig.Channel = ADC_CHANNEL_2;
+	sConfig.Rank = ADC_REGULAR_RANK_2;
+	sConfig.SingleDiff = ADC_SINGLE_ENDED;
+	sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+	sConfig.OffsetNumber = ADC_OFFSET_NONE;
+	sConfig.Offset = 0;
+	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
+		Error_Handler();
+	}
+	sConfig.Channel = ADC_CHANNEL_3;
+	sConfig.Rank = ADC_REGULAR_RANK_3;
+	sConfig.SingleDiff = ADC_SINGLE_ENDED;
+	sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+	sConfig.OffsetNumber = ADC_OFFSET_NONE;
+	sConfig.Offset = 0;
+	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
+		Error_Handler();
+	}
   /* USER CODE END ADC1_Init 2 */
 
 }
@@ -419,9 +479,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 1000;
+  htim2.Init.Prescaler = 8;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 6400;
+  htim2.Init.Period = 16;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -461,7 +521,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, Floodlight_Pin|IndicLED_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, FloodlightGrn_Pin|IndicLED_Pin|FloodlightBlu_Pin|FloodlightRed_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : Mains_Pin */
   GPIO_InitStruct.Pin = Mains_Pin;
@@ -469,8 +529,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(Mains_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : Floodlight_Pin IndicLED_Pin */
-  GPIO_InitStruct.Pin = Floodlight_Pin|IndicLED_Pin;
+  /*Configure GPIO pins : FloodlightGrn_Pin IndicLED_Pin FloodlightBlu_Pin FloodlightRed_Pin */
+  GPIO_InitStruct.Pin = FloodlightGrn_Pin|IndicLED_Pin|FloodlightBlu_Pin|FloodlightRed_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -495,11 +555,10 @@ static void MX_GPIO_Init(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
-  }
+	/* User can add his own implementation to report the HAL error return state */
+	__disable_irq();
+	while (1) {
+	}
   /* USER CODE END Error_Handler_Debug */
 }
 
