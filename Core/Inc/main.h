@@ -57,23 +57,56 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define DimGrn_Pin GPIO_PIN_0
-#define DimGrn_GPIO_Port GPIOA
-#define DimBlu_Pin GPIO_PIN_1
-#define DimBlu_GPIO_Port GPIOA
-#define DimRed_Pin GPIO_PIN_2
-#define DimRed_GPIO_Port GPIOA
-#define Mains_Pin GPIO_PIN_3
+#define Button6_Pin GPIO_PIN_0
+#define Button6_GPIO_Port GPIOF
+#define Button6_EXTI_IRQn EXTI0_IRQn
+#define Button5_Pin GPIO_PIN_1
+#define Button5_GPIO_Port GPIOF
+#define Button5_EXTI_IRQn EXTI1_IRQn
+#define Knob1_Pin GPIO_PIN_0
+#define Knob1_GPIO_Port GPIOA
+#define Knob2_Pin GPIO_PIN_1
+#define Knob2_GPIO_Port GPIOA
+#define Knob8_Pin GPIO_PIN_2
+#define Knob8_GPIO_Port GPIOA
+#define Knob3_Pin GPIO_PIN_3
+#define Knob3_GPIO_Port GPIOA
+#define Knob4_Pin GPIO_PIN_4
+#define Knob4_GPIO_Port GPIOA
+#define Knob5_Pin GPIO_PIN_5
+#define Knob5_GPIO_Port GPIOA
+#define Knob5A6_Pin GPIO_PIN_6
+#define Knob5A6_GPIO_Port GPIOA
+#define Knob6_Pin GPIO_PIN_7
+#define Knob6_GPIO_Port GPIOA
+#define Floodlight2Grn_Pin GPIO_PIN_0
+#define Floodlight2Grn_GPIO_Port GPIOB
+#define Floodlight1Grn_Pin GPIO_PIN_1
+#define Floodlight1Grn_GPIO_Port GPIOB
+#define Button4_Pin GPIO_PIN_8
+#define Button4_GPIO_Port GPIOA
+#define Button4_EXTI_IRQn EXTI9_5_IRQn
+#define Mains_Pin GPIO_PIN_9
 #define Mains_GPIO_Port GPIOA
-#define Mains_EXTI_IRQn EXTI3_IRQn
-#define FloodlightGrn_Pin GPIO_PIN_1
-#define FloodlightGrn_GPIO_Port GPIOB
+#define Mains_EXTI_IRQn EXTI9_5_IRQn
+#define Floodlight2Red_Pin GPIO_PIN_10
+#define Floodlight2Red_GPIO_Port GPIOA
+#define Button3_Pin GPIO_PIN_11
+#define Button3_GPIO_Port GPIOA
+#define Floodlight2Blu_Pin GPIO_PIN_12
+#define Floodlight2Blu_GPIO_Port GPIOA
 #define IndicLED_Pin GPIO_PIN_3
 #define IndicLED_GPIO_Port GPIOB
-#define FloodlightBlu_Pin GPIO_PIN_6
-#define FloodlightBlu_GPIO_Port GPIOB
-#define FloodlightRed_Pin GPIO_PIN_7
-#define FloodlightRed_GPIO_Port GPIOB
+#define Button1_Pin GPIO_PIN_4
+#define Button1_GPIO_Port GPIOB
+#define Button1_EXTI_IRQn EXTI4_IRQn
+#define Button2_Pin GPIO_PIN_5
+#define Button2_GPIO_Port GPIOB
+#define Button2_EXTI_IRQn EXTI9_5_IRQn
+#define Floodlight1Blu_Pin GPIO_PIN_6
+#define Floodlight1Blu_GPIO_Port GPIOB
+#define Floodlight1Red_Pin GPIO_PIN_7
+#define Floodlight1Red_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

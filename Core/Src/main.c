@@ -42,16 +42,19 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
+ADC_HandleTypeDef hadc2;
 
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
 typedef enum {
-	DIM_GRN = ADC_CHANNEL_1, DIM_BLU = ADC_CHANNEL_2, DIM_RED = ADC_CHANNEL_3
-} TempPotChannelDef;
+	//NOTE: repeat since latter half knobs are on adc2
+	KNOB1 = ADC_CHANNEL_1, KNOB2 = ADC_CHANNEL_2, KNOB3 = ADC_CHANNEL_3, KNOB4 = ADC_CHANNEL_4,
+	KNOB5 = ADC_CHANNEL_1, KNOB6 = ADC_CHANNEL_2, KNOB7 = ADC_CHANNEL_3, KNOB8 = ADC_CHANNEL_4
+} KnobChannel;
 
 struct FloodlightLED {
-	TempPotChannelDef tempPotColourChannel;
 	uint32_t LEDColourChannelPin;
 	_Bool pinOn;
 	unsigned short dim;
@@ -61,9 +64,18 @@ struct FloodlightLED {
 	unsigned short fall2;
 };
 
-#define NUMLIGHTS 1
+struct Knob {
+	ADC_HandleTypeDef * adc;
+	KnobChannel channel;
+	uint16_t value;
+};
+
+#define NUMLIGHTS 2
 #define COLOURCHANNELSPERLIGHT 3
 struct FloodlightLED floodlights[NUMLIGHTS][COLOURCHANNELSPERLIGHT];
+
+#define NUMKNOBS 8
+struct Knob knobs[NUMKNOBS];
 
 unsigned long width = 0;
 unsigned long avgWidth = 0;
@@ -81,10 +93,6 @@ volatile uint32_t *DWT_CYCCNT = (uint32_t*) 0xE0001004;
 volatile uint32_t *DEMCR = (uint32_t*) 0xE000EDFC;
 volatile uint32_t *LAR = (uint32_t*) 0xE0001FB0; // <-- added lock access register
 
-//PLACE SHIFT HERE!!  FACTOR FOR DELAY IN MAINS DETECTION
-//485us seems to be good shift delay
-int shift = 0;
-
 const uint32_t startReset = (uint32_t) (pow(2, sizeof(uint32_t) * 8));
 const uint32_t startTilNowReset = (uint32_t) (pow(2, sizeof(uint32_t) * 8) / 64);
 /* USER CODE END PV */
@@ -92,27 +100,25 @@ const uint32_t startTilNowReset = (uint32_t) (pow(2, sizeof(uint32_t) * 8) / 64)
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_ADC1_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_ADC1_Init(void);
+static void MX_ADC2_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-//Set to (498+1)*(3+1) so same rate as timer
-#define micros() (*DWT_CYCCNT/1996)
-#define starttilnow() (micros() - start)
+//Set to (498+1)*(3+1) so same rate as timer2
+#define timer2cycle() (*DWT_CYCCNT/1996)
+#define starttilnow() (timer2cycle() - start)
 
 #define ADC_WIDTH 4092
 #define HALF_ADC_WIDTH 2048
 
-#define MIN_TRIM 0
-#define MAX_TRIM 255
-//#define MIN_TRIM 100
-//#define MAX_TRIM 3900
-#define WIDTH_TRIM (MAX_TRIM - MIN_TRIM + 1)
-#define CORRECTED_NEW_TRIM ((trimDuty - MIN_TRIM)%WIDTH_TRIM)
+#define MAX_LED_DIM 255
+#define NUM_LED_LEVELS 256 //255+1
 
 #define LED_ON_STATE(floodlightNum, LEDNum) if(!floodlights[floodlightNum][LEDNum].pinOn) {\
 		HAL_GPIO_WritePin(GPIOB, floodlights[floodlightNum][LEDNum].LEDColourChannelPin, GPIO_PIN_SET);\
@@ -129,26 +135,23 @@ _Bool initializeFloodlightStructs() {
 			//NOTE: assuming no more than 10 LED per floodlight
 			switch (10*floodlightNum + LEDNum) {
 			case 0:
-				floodlights[floodlightNum][LEDNum].tempPotColourChannel = ADC_CHANNEL_1;
-				floodlights[floodlightNum][LEDNum].LEDColourChannelPin = FloodlightGrn_Pin;
+				floodlights[floodlightNum][LEDNum].LEDColourChannelPin = Floodlight1Grn_Pin;
 				break;
 			case 1:
-				floodlights[floodlightNum][LEDNum].tempPotColourChannel = ADC_CHANNEL_2;
-				floodlights[floodlightNum][LEDNum].LEDColourChannelPin = FloodlightBlu_Pin;
+				floodlights[floodlightNum][LEDNum].LEDColourChannelPin = Floodlight1Blu_Pin;
 				break;
 			case 2:
-				floodlights[floodlightNum][LEDNum].tempPotColourChannel = ADC_CHANNEL_3;
-				floodlights[floodlightNum][LEDNum].LEDColourChannelPin = FloodlightRed_Pin;
+				floodlights[floodlightNum][LEDNum].LEDColourChannelPin = Floodlight1Red_Pin;
 				break;
-//			case 10:
-//				Floodlight[floodlightNum][LEDNum].tempPotColourChannel = ADC_CHANNEL_1;
-//				break;
-//			case 11:
-//				Floodlight[floodlightNum][LEDNum].tempPotColourChannel = ADC_CHANNEL_2;
-//				break;
-//			case 12:
-//				Floodlight[floodlightNum][LEDNum].tempPotColourChannel = ADC_CHANNEL_3;
-//				break;
+			case 10:
+				floodlights[floodlightNum][LEDNum].LEDColourChannelPin = Floodlight2Grn_Pin;
+				break;
+			case 11:
+				floodlights[floodlightNum][LEDNum].LEDColourChannelPin = Floodlight2Blu_Pin;
+				break;
+			case 12:
+				floodlights[floodlightNum][LEDNum].LEDColourChannelPin = Floodlight2Red_Pin;
+				break;
 			default:
 				//Configure shit!
 				return 1;
@@ -165,7 +168,53 @@ _Bool initializeFloodlightStructs() {
 	return 0;
 }
 
-uint16_t readADCChannel(TempPotChannelDef channel) {
+_Bool initializeKnobStructs() {
+	char knob;
+	for(knob = 0; knob < NUMKNOBS; knob++) {
+		switch(knob) {
+		case 0:
+			knobs[knob].channel = KNOB1;
+			knobs[knob].adc = &hadc1;
+			break;
+		case 1:
+			knobs[knob].channel = KNOB2;
+			knobs[knob].adc = &hadc1;
+			break;
+		case 2:
+			knobs[knob].channel = KNOB3;
+			knobs[knob].adc = &hadc1;
+			break;
+		case 3:
+			knobs[knob].channel = KNOB4;
+			knobs[knob].adc = &hadc1;
+			break;
+		case 4:
+			knobs[knob].channel = KNOB5;
+			knobs[knob].adc = &hadc2;
+			break;
+		case 5:
+			knobs[knob].channel = KNOB6;
+			knobs[knob].adc = &hadc2;
+			break;
+		case 6:
+			knobs[knob].channel = KNOB7;
+			knobs[knob].adc = &hadc2;
+			break;
+		case 7:
+			knobs[knob].channel = KNOB8;
+			knobs[knob].adc = &hadc2;
+			break;
+		default:
+			//Configure shit!
+			return 1;
+		}
+
+		knobs[knob].value = 0;
+	}
+	return 0;
+}
+
+uint16_t readADCChannel(KnobChannel channel, ADC_HandleTypeDef * adc) {
 	ADC_ChannelConfTypeDef sConfig = { 0 };
 
 	/** Configure Regular Channel
@@ -180,15 +229,24 @@ uint16_t readADCChannel(TempPotChannelDef channel) {
 		Error_Handler();
 	}
 
-	HAL_ADC_Start(&hadc1);
-	HAL_ADC_PollForConversion(&hadc1, 1);
-	return HAL_ADC_GetValue(&hadc1);
+	HAL_ADC_Start(adc);
+	HAL_ADC_PollForConversion(adc, 1);
+	return HAL_ADC_GetValue(adc);
+}
+
+void pollKnobs() {
+	static char knob;
+	for(knob = 0; knob < NUMKNOBS; knob++) {
+		//Smooth to filter out noise
+		knobs[knob].value = (9*knobs[knob].value +
+				readADCChannel(knobs[knob].channel, knobs[knob].adc)) / 10;
+	}
 }
 void resetRiseFall(char floodlightNum, char LEDNum, _Bool *dimCorrect) {
 	//Divide by 2 since we cycle duty per half-wave, not full wave
 		static unsigned short effDuty;
 	effDuty = (short) ((((unsigned long) width
-			* (unsigned long) (floodlights[floodlightNum][LEDNum].dim - MIN_TRIM))) / (2 * WIDTH_TRIM));
+			* (unsigned long) floodlights[floodlightNum][LEDNum].dim)) / (2 * NUM_LED_LEVELS));
 	//If dim is odd, this granularity will be lost in compression since only 128 pulse width levels available
 	//i.e. (512*255)/(2*256) == 255 == (512*254)/(2*256)
 	//Circumvent this by offsetting all odd values by 1 on fall to increase pulse width by 1/2 a level
@@ -234,69 +292,56 @@ void mainsDetect() {
 		set = 1;
 	}
 	*DWT_CYCCNT = 0;                  // clear DWT cycle counter
-	start = micros();
+	start = timer2cycle();
+
+
+	//--------------------------------------------------------------------------------------------------------
+	//ONLY FOR TESTING
 	static _Bool flip1, flip2;
 	static uint16_t reset = 0;
 		reset++;
 		if (reset >= 1) {
-			if (floodlights[0][0].dim > MAX_TRIM) floodlights[0][0].dim=0;
-			if (floodlights[0][1].dim > MAX_TRIM) floodlights[0][1].dim=0;
+			if (floodlights[0][0].dim > MAX_LED_DIM) floodlights[0][0].dim=0;
+			if (floodlights[0][1].dim > MAX_LED_DIM) floodlights[0][1].dim=0;
 			if(!flip1) {
 			floodlights[0][0].dim = (floodlights[0][0].dim + 1);
-			if (floodlights[0][0].dim >= MAX_TRIM-1) {
+			if (floodlights[0][0].dim >= MAX_LED_DIM-1) {
 				flip1 = 1;
-				floodlights[0][0].dim = MAX_TRIM-1;
+				floodlights[0][0].dim = MAX_LED_DIM-1;
 			}
 			} else {
 				floodlights[0][0].dim = (floodlights[0][0].dim - 1);
-				if (floodlights[0][0].dim <= 0 || floodlights[0][0].dim > MAX_TRIM) {
+				if (floodlights[0][0].dim <= 0 || floodlights[0][0].dim > MAX_LED_DIM) {
 					flip1 = 0;
 					floodlights[0][0].dim = 0;
 				}
 			}
 			if(!flip2) {
 			floodlights[0][1].dim = (floodlights[0][1].dim - 1);
-			if (floodlights[0][1].dim == MAX_TRIM-1) flip2 = 1;
-			if (floodlights[0][1].dim <= 0 || floodlights[0][1].dim > MAX_TRIM) {
+			if (floodlights[0][1].dim == MAX_LED_DIM-1) flip2 = 1;
+			if (floodlights[0][1].dim <= 0 || floodlights[0][1].dim > MAX_LED_DIM ) {
 				flip2 = 1;
 				floodlights[0][1].dim = 0;
 			}
 			} else {
 				floodlights[0][1].dim = (floodlights[0][1].dim + 1);
-				if (floodlights[0][0].dim >= MAX_TRIM-1) {
+				if (floodlights[0][0].dim >= MAX_LED_DIM-1) {
 					flip2 = 1;
-					floodlights[0][1].dim = MAX_TRIM-1;
+					floodlights[0][1].dim = MAX_LED_DIM-1;
 				}
 			}
-					floodlights[0][2].dim = abs(floodlights[0][0].dim - floodlights[0][1].dim) % MAX_TRIM;
+					floodlights[0][2].dim = abs(floodlights[0][0].dim - floodlights[0][1].dim) % MAX_LED_DIM;
 			        static _Bool dimCorrect;
 					resetRiseFall(0, 0, &dimCorrect);
 					resetRiseFall(0, 1, &dimCorrect);
 					resetRiseFall(0, 2, &dimCorrect);
 					reset = 0;
 		}
+		//--------------------------------------------------------------------------------------------------------
+}
 
-//	floodlights[0][0].dim = (floodlights[0][0].dim + 1) % 4096;
-//			floodlights[0][1].dim = (floodlights[0][1].dim - 1) % 4096;
-//			floodlights[0][2].dim = abs(floodlights[0][0].dim - floodlights[0][1].dim) % 4096;
-//			resetRiseFall(0, 0);
-//			resetRiseFall(0, 1);
-//			resetRiseFall(0, 2);
-
-	//--------------------------------------------------------------------------------------------------------
-	//ONLY FOR TESTING
-//	short LEDNum;
-//	for (LEDNum = 0; LEDNum < COLOURCHANNELSPERLIGHT; LEDNum++) {
-//		static unsigned short curDuty;
-//		curDuty = readADCChannel(floodlights[0][LEDNum].tempPotColourChannel);
-//		if (readADCChannel(floodlights[0][LEDNum].dim != curDuty)) {
-//			floodlights[0][LEDNum].dim =
-//					(unsigned short) (9 * floodlights[0][LEDNum].dim + curDuty) / 10;
-//			//  reset applicable variables
-//			resetRiseFall(0, LEDNum);
-//		}
-//	}
-	//--------------------------------------------------------------------------------------------------------
+void buttonPress (uint16_t GPIO_Pin) {
+	//TODO: Fill in with button press stuff
 }
 
 #pragma GCC push_options
@@ -328,11 +373,18 @@ void pulseFloodlight() {
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == Mains_Pin) {
 		mainsDetect();
-
+	} else if (GPIO_Pin == Button1_Pin || GPIO_Pin == Button2_Pin || GPIO_Pin == Button3_Pin ||
+			GPIO_Pin == Button4_Pin || GPIO_Pin == Button5_Pin || GPIO_Pin == Button6_Pin) {
+		buttonPress(GPIO_Pin);
 	}
 }
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
-	pulseFloodlight();
+	if (htim->Instance == TIM2) {
+		pulseFloodlight();
+	}
+	else if (htim->Instance == TIM3) {
+		pollKnobs();
+	}
 }
 /* USER CODE END 0 */
 
@@ -364,11 +416,14 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_ADC1_Init();
   MX_TIM2_Init();
+  MX_ADC1_Init();
+  MX_ADC2_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
 	//Start interrupts & ADC
 	HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
+	HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED);
 	HAL_TIM_Base_Start_IT(&htim2);
 
 	*DEMCR = *DEMCR | 0x01000000;     // enable trace
@@ -378,6 +433,10 @@ int main(void)
 
 	//If fails config, exit program
 	if (initializeFloodlightStructs())
+		return 0;
+
+	//If fails config, exit program
+	if (initializeKnobStructs())
 		return 0;
   /* USER CODE END 2 */
 
@@ -501,25 +560,64 @@ static void MX_ADC1_Init(void)
   }
   /* USER CODE BEGIN ADC1_Init 2 */
 
-	sConfig.Channel = ADC_CHANNEL_2;
-	sConfig.Rank = ADC_REGULAR_RANK_2;
-	sConfig.SingleDiff = ADC_SINGLE_ENDED;
-	sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
-	sConfig.OffsetNumber = ADC_OFFSET_NONE;
-	sConfig.Offset = 0;
-	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
-		Error_Handler();
-	}
-	sConfig.Channel = ADC_CHANNEL_3;
-	sConfig.Rank = ADC_REGULAR_RANK_3;
-	sConfig.SingleDiff = ADC_SINGLE_ENDED;
-	sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
-	sConfig.OffsetNumber = ADC_OFFSET_NONE;
-	sConfig.Offset = 0;
-	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
-		Error_Handler();
-	}
   /* USER CODE END ADC1_Init 2 */
+
+}
+
+/**
+  * @brief ADC2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC2_Init(void)
+{
+
+  /* USER CODE BEGIN ADC2_Init 0 */
+
+  /* USER CODE END ADC2_Init 0 */
+
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC2_Init 1 */
+
+  /* USER CODE END ADC2_Init 1 */
+
+  /** Common config
+  */
+  hadc2.Instance = ADC2;
+  hadc2.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
+  hadc2.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc2.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc2.Init.ContinuousConvMode = DISABLE;
+  hadc2.Init.DiscontinuousConvMode = DISABLE;
+  hadc2.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc2.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc2.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc2.Init.NbrOfConversion = 1;
+  hadc2.Init.DMAContinuousRequests = DISABLE;
+  hadc2.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc2.Init.LowPowerAutoWait = DISABLE;
+  hadc2.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
+  if (HAL_ADC_Init(&hadc2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_1;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SingleDiff = ADC_SINGLE_ENDED;
+  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+  sConfig.OffsetNumber = ADC_OFFSET_NONE;
+  sConfig.Offset = 0;
+  if (HAL_ADC_ConfigChannel(&hadc2, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC2_Init 2 */
+
+  /* USER CODE END ADC2_Init 2 */
 
 }
 
@@ -569,6 +667,51 @@ static void MX_TIM2_Init(void)
 }
 
 /**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 4096;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 4096;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -580,35 +723,68 @@ static void MX_GPIO_Init(void)
 /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, FloodlightGrn_Pin|IndicLED_Pin|FloodlightBlu_Pin|FloodlightRed_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, Floodlight2Grn_Pin|Floodlight1Grn_Pin|IndicLED_Pin|Floodlight1Blu_Pin
+                          |Floodlight1Red_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : Mains_Pin */
-  GPIO_InitStruct.Pin = Mains_Pin;
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, Floodlight2Red_Pin|Floodlight2Blu_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pins : Button6_Pin Button5_Pin */
+  GPIO_InitStruct.Pin = Button6_Pin|Button5_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(Mains_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : FloodlightGrn_Pin FloodlightBlu_Pin FloodlightRed_Pin */
-  GPIO_InitStruct.Pin = FloodlightGrn_Pin|FloodlightBlu_Pin|FloodlightRed_Pin;
+  /*Configure GPIO pins : Floodlight2Grn_Pin IndicLED_Pin */
+  GPIO_InitStruct.Pin = Floodlight2Grn_Pin|IndicLED_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : Floodlight1Grn_Pin Floodlight1Blu_Pin Floodlight1Red_Pin */
+  GPIO_InitStruct.Pin = Floodlight1Grn_Pin|Floodlight1Blu_Pin|Floodlight1Red_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : IndicLED_Pin */
-  GPIO_InitStruct.Pin = IndicLED_Pin;
+  /*Configure GPIO pins : Button4_Pin Mains_Pin Button3_Pin */
+  GPIO_InitStruct.Pin = Button4_Pin|Mains_Pin|Button3_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : Floodlight2Red_Pin Floodlight2Blu_Pin */
+  GPIO_InitStruct.Pin = Floodlight2Red_Pin|Floodlight2Blu_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(IndicLED_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : Button1_Pin Button2_Pin */
+  GPIO_InitStruct.Pin = Button1_Pin|Button2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI4_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
