@@ -100,18 +100,18 @@ static void MX_TIM2_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-//Set to (127+1)*(15+1) so same rate as timer
-#define micros() (*DWT_CYCCNT/2048)
+//Set to (498+1)*(3+1) so same rate as timer
+#define micros() (*DWT_CYCCNT/1996)
 #define starttilnow() (micros() - start)
 
 #define ADC_WIDTH 4092
 #define HALF_ADC_WIDTH 2048
 
 #define MIN_TRIM 0
-#define MAX_TRIM 4096
+#define MAX_TRIM 255
 //#define MIN_TRIM 100
 //#define MAX_TRIM 3900
-#define WIDTH_TRIM (MAX_TRIM - MIN_TRIM)
+#define WIDTH_TRIM (MAX_TRIM - MIN_TRIM + 1)
 #define CORRECTED_NEW_TRIM ((trimDuty - MIN_TRIM)%WIDTH_TRIM)
 
 #define LED_ON_STATE(floodlightNum, LEDNum) if(!floodlights[floodlightNum][LEDNum].pinOn) {\
@@ -154,8 +154,7 @@ _Bool initializeFloodlightStructs() {
 				return 1;
 			}
 			floodlights[floodlightNum][LEDNum].pinOn = 0;
-			//TEMP!
-			floodlights[floodlightNum][LEDNum].dim = 800;
+			floodlights[floodlightNum][LEDNum].dim = 0;
 			floodlights[floodlightNum][LEDNum].rise1 = 0;
 			floodlights[floodlightNum][LEDNum].fall1 = 0;
 			floodlights[floodlightNum][LEDNum].rise2 = 0;
@@ -185,24 +184,28 @@ uint16_t readADCChannel(TempPotChannelDef channel) {
 	HAL_ADC_PollForConversion(&hadc1, 1);
 	return HAL_ADC_GetValue(&hadc1);
 }
-void resetRiseFall(char floodlightNum, char LEDNum) {
+void resetRiseFall(char floodlightNum, char LEDNum, _Bool *dimCorrect) {
 	//Divide by 2 since we cycle duty per half-wave, not full wave
 		static unsigned short effDuty;
 	effDuty = (short) ((((unsigned long) width
-			* (unsigned long) (floodlights[0][LEDNum].dim - MIN_TRIM))) / (2 * WIDTH_TRIM));
-	//TODO: if RGB value is odd, increment just fall by 1, to allow for full 256 bins avail
-	//TODO: calculate & set timer freq so exactly 512*mains freq
+			* (unsigned long) (floodlights[floodlightNum][LEDNum].dim - MIN_TRIM))) / (2 * WIDTH_TRIM));
+	//If dim is odd, this granularity will be lost in compression since only 128 pulse width levels available
+	//i.e. (512*255)/(2*256) == 255 == (512*254)/(2*256)
+	//Circumvent this by offsetting all odd values by 1 on fall to increase pulse width by 1/2 a level
+	//NOTE passing in as pointer since resetRiseFall can be triggered asynchronously via seperate interrupts
+	*dimCorrect = floodlights[floodlightNum][LEDNum].dim & 1;
+	//TODO: calculate & set timer freq so exactly 512*mains freq (change if using ext osc)
 	floodlights[floodlightNum][LEDNum].rise1 = ((width / 2) - effDuty) / 2;
-	floodlights[floodlightNum][LEDNum].fall1 = floodlights[floodlightNum][LEDNum].rise1 + effDuty;
+	floodlights[floodlightNum][LEDNum].fall1 = floodlights[floodlightNum][LEDNum].rise1 + effDuty + *dimCorrect;
 	floodlights[floodlightNum][LEDNum].rise2 = (width / 2) + floodlights[floodlightNum][LEDNum].rise1;
 	floodlights[floodlightNum][LEDNum].fall2 = (width / 2) + floodlights[floodlightNum][LEDNum].fall1;
 }
-void resetAllRiseFall() {
-	short floodlightNum, LEDNum;
+void resetAllRiseFall(_Bool *dimCorrect) {
+	static short floodlightNum, LEDNum;
 		for (floodlightNum = 0; floodlightNum < NUMLIGHTS;
 				floodlightNum++) {
 			for (LEDNum = 0; LEDNum < COLOURCHANNELSPERLIGHT; LEDNum++) {
-				resetRiseFall(floodlightNum, LEDNum);
+				resetRiseFall(floodlightNum, LEDNum, dimCorrect);
 			}
 		}
 }
@@ -223,7 +226,8 @@ void mainsDetect() {
 		//Reset avg
 		//avgWidth = width;
 		//reset applicable variables
-		resetAllRiseFall();
+        static _Bool dimCorrect;
+		resetAllRiseFall(&dimCorrect);
       }
 
 	} else {
@@ -232,42 +236,45 @@ void mainsDetect() {
 	*DWT_CYCCNT = 0;                  // clear DWT cycle counter
 	start = micros();
 	static _Bool flip1, flip2;
-	//	reset++;
-		//if (reset == 5) {
-			if (floodlights[0][0].dim > 5000) floodlights[0][0].dim=0;
-			if (floodlights[0][1].dim > 5000) floodlights[0][1].dim=0;
+	static uint16_t reset = 0;
+		reset++;
+		if (reset >= 1) {
+			if (floodlights[0][0].dim > MAX_TRIM) floodlights[0][0].dim=0;
+			if (floodlights[0][1].dim > MAX_TRIM) floodlights[0][1].dim=0;
 			if(!flip1) {
-			floodlights[0][0].dim = (floodlights[0][0].dim + 16);
-			if (floodlights[0][0].dim >= 4095) {
+			floodlights[0][0].dim = (floodlights[0][0].dim + 1);
+			if (floodlights[0][0].dim >= MAX_TRIM-1) {
 				flip1 = 1;
-				floodlights[0][0].dim = 4095;
+				floodlights[0][0].dim = MAX_TRIM-1;
 			}
 			} else {
-				floodlights[0][0].dim = (floodlights[0][0].dim - 16);
-				if (floodlights[0][0].dim <= 0 || floodlights[0][0].dim > 5000) {
+				floodlights[0][0].dim = (floodlights[0][0].dim - 1);
+				if (floodlights[0][0].dim <= 0 || floodlights[0][0].dim > MAX_TRIM) {
 					flip1 = 0;
 					floodlights[0][0].dim = 0;
 				}
 			}
 			if(!flip2) {
-			floodlights[0][1].dim = (floodlights[0][1].dim - 16);
-			if (floodlights[0][1].dim == 4095) flip2 = 1;
-			if (floodlights[0][1].dim <= 0 || floodlights[0][1].dim > 5000) {
+			floodlights[0][1].dim = (floodlights[0][1].dim - 1);
+			if (floodlights[0][1].dim == MAX_TRIM-1) flip2 = 1;
+			if (floodlights[0][1].dim <= 0 || floodlights[0][1].dim > MAX_TRIM) {
 				flip2 = 1;
 				floodlights[0][1].dim = 0;
 			}
 			} else {
-				floodlights[0][1].dim = (floodlights[0][1].dim + 16);
-				if (floodlights[0][0].dim >= 4095) {
+				floodlights[0][1].dim = (floodlights[0][1].dim + 1);
+				if (floodlights[0][0].dim >= MAX_TRIM-1) {
 					flip2 = 1;
-					floodlights[0][1].dim = 4095;
+					floodlights[0][1].dim = MAX_TRIM-1;
 				}
 			}
-					floodlights[0][2].dim = abs(floodlights[0][0].dim - floodlights[0][1].dim) % 4096;
-					resetRiseFall(0, 0);
-					resetRiseFall(0, 1);
-					resetRiseFall(0, 2);
-		//}
+					floodlights[0][2].dim = abs(floodlights[0][0].dim - floodlights[0][1].dim) % MAX_TRIM;
+			        static _Bool dimCorrect;
+					resetRiseFall(0, 0, &dimCorrect);
+					resetRiseFall(0, 1, &dimCorrect);
+					resetRiseFall(0, 2, &dimCorrect);
+					reset = 0;
+		}
 
 //	floodlights[0][0].dim = (floodlights[0][0].dim + 1) % 4096;
 //			floodlights[0][1].dim = (floodlights[0][1].dim - 1) % 4096;
@@ -535,9 +542,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 127;
+  htim2.Init.Prescaler = 498;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 15;
+  htim2.Init.Period = 3;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
