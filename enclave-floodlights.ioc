@@ -102,6 +102,7 @@ NVIC.RCC_IRQn=true\:0\:0\:false\:false\:true\:true\:false\:true
 NVIC.SVCall_IRQn=true\:0\:0\:false\:false\:true\:false\:false\:false
 NVIC.SysTick_IRQn=true\:15\:0\:false\:false\:true\:false\:true\:false
 NVIC.TIM2_IRQn=true\:0\:0\:false\:false\:true\:true\:true\:true
+NVIC.USART2_IRQn=true\:0\:0\:false\:false\:true\:true\:true\:true
 NVIC.UsageFault_IRQn=true\:0\:0\:false\:false\:true\:false\:false\:false
 PA0.GPIOParameters=GPIO_Label,GPIO_Mode
 PA0.GPIO_Label=Knob1
